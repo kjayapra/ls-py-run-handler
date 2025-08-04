@@ -20,6 +20,8 @@ psycopg2-binary = "^2.9.10"
 aiobotocore = "^2.21.1"
 pydantic-settings = "^2.8.1"
 orjson = "^3.10.15"
+redis = "^4.5.4"
+fastapi-cache2 = {extras = ["redis"], version = "^0.2.1"}
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.1.0"

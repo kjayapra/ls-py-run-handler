@@ -10,6 +10,22 @@ from httpx import AsyncClient
 from ls_py_handler.main import app
 
 
+@pytest.fixture(scope="session", autouse=True)
+def initialize_cache():
+    """Initialize cache for all benchmark tests."""
+    from fastapi_cache import FastAPICache
+    try:
+        from fastapi_cache.backends.redis import RedisBackend
+        FastAPICache.init(RedisBackend(), prefix="ls-py-handler-cache")
+        print("Initialized cache with Redis backend")
+    except Exception as e:
+        print(f"Redis failed: {e}, using in-memory cache")
+        from fastapi_cache.backends.inmemory import InMemoryBackend
+        FastAPICache.init(InMemoryBackend(), prefix="ls-py-handler-cache")
+    yield
+    # No cleanup needed
+
+
 def generate_large_string(size_kb=10):
     """Generate a random string of approximately size_kb kilobytes."""
     # 1 KB is roughly 1024 characters

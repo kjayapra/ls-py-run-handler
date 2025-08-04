@@ -8,6 +8,7 @@ from typing import Any, List, Optional
 import asyncpg
 from aiobotocore.session import get_session
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi_cache.decorator import cache
 from pydantic import UUID4
 
 from ls_py_handler.api.models.run import Run
@@ -96,6 +97,7 @@ async def create_runs(
 
 
 @router.get("/search", status_code=status.HTTP_200_OK)
+@cache(expire=settings.CACHE_TTL_SEARCH)  # Cache search results for 4 hours - log data is immutable
 async def search_runs(
     trace_id: Optional[UUID4] = None,
     name: Optional[str] = None,
@@ -167,6 +169,7 @@ async def search_runs(
 
 
 @router.get("/{run_id}", status_code=status.HTTP_200_OK)
+@cache(expire=settings.CACHE_TTL_GET)  # Cache for 24 hours - log data is immutable
 async def get_run(
     run_id: UUID4,
     db: asyncpg.Connection = Depends(get_db_conn),
