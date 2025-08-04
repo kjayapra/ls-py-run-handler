@@ -167,3 +167,81 @@ def test_create_batch_runs_5_1000kb(client, aio_benchmark):
     )
     assert result.status_code == 201
     assert len(result.json()["run_ids"]) == 5
+
+
+async def query_runs_benchmark(client, run_ids):
+    """
+    Query all runs by ID, measuring only GET performance.
+    """
+    for run_id in run_ids:
+        get_response = await client.get(f"/runs/{run_id}")
+        assert get_response.status_code == 200
+        
+        # Verify data structure 
+        run_data = get_response.json()
+        assert "id" in run_data
+        assert "inputs" in run_data
+        assert "outputs" in run_data
+        assert "metadata" in run_data
+    
+    return len(run_ids)
+
+
+@pytest_asyncio.fixture
+async def runs_10kb_fields(client):
+    """Create 10 runs with 10KB fields for query benchmarking."""
+    run_dicts = generate_batch_run_dicts(10, 10)
+    serialized_json = orjson.dumps(run_dicts)
+    
+    post_response = await send_request_with_pre_serialized_json(client, serialized_json)
+    return post_response.json()["run_ids"]
+
+
+def test_query_runs_10kb_fields(runs_10kb_fields, client, aio_benchmark):
+    """
+    Benchmark query operations for runs with 10KB fields.
+    Measures GET performance including S3 retrieval.
+    """
+    # Benchmark only the query operations
+    result = aio_benchmark(query_runs_benchmark, client, runs_10kb_fields)
+    assert result == 10
+
+
+@pytest_asyncio.fixture
+async def runs_50kb_fields(client):
+    """Create 10 runs with 50KB fields for query benchmarking."""
+    run_dicts = generate_batch_run_dicts(10, 50)
+    serialized_json = orjson.dumps(run_dicts)
+    
+    post_response = await send_request_with_pre_serialized_json(client, serialized_json)
+    return post_response.json()["run_ids"]
+
+
+@pytest_asyncio.fixture
+async def runs_100kb_fields(client):
+    """Create 10 runs with 100KB fields for query benchmarking."""
+    run_dicts = generate_batch_run_dicts(10, 100)
+    serialized_json = orjson.dumps(run_dicts)
+    
+    post_response = await send_request_with_pre_serialized_json(client, serialized_json)
+    return post_response.json()["run_ids"]
+
+
+def test_query_runs_50kb_fields(runs_50kb_fields, client, aio_benchmark):
+    """
+    Benchmark query operations for runs with 50KB fields.
+    Measures GET performance including S3 retrieval.
+    """
+    # Benchmark only the query operations
+    result = aio_benchmark(query_runs_benchmark, client, runs_50kb_fields)
+    assert result == 10
+
+
+def test_query_runs_100kb_fields(runs_100kb_fields, client, aio_benchmark):
+    """
+    Benchmark query operations for runs with 100KB fields.
+    Measures GET performance including S3 retrieval.
+    """
+    # Benchmark only the query operations
+    result = aio_benchmark(query_runs_benchmark, client, runs_100kb_fields)
+    assert result == 10
