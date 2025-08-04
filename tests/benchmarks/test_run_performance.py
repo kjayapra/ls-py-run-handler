@@ -94,6 +94,24 @@ async def send_request_with_pre_serialized_json(client, serialized_json):
     return response
 
 
+def test_create_batch_runs_1000_5kb(client, aio_benchmark):
+    """
+    This excludes the time for run dictionary creation and JSON serialization,
+    focusing only on the API call performance.
+    """
+    # Create the run dictionaries outside the benchmark
+    run_dicts = generate_batch_run_dicts(1000, 5)
+
+    # Pre-serialize the JSON outside the benchmark
+    serialized_json = orjson.dumps(run_dicts)
+
+    # Benchmark only the HTTP request with pre-serialized JSON
+    result = aio_benchmark(
+        send_request_with_pre_serialized_json, client, serialized_json
+    )
+    assert result.status_code == 201
+    assert len(result.json()["run_ids"]) == 1000
+
 def test_create_batch_runs_500_10kb(client, aio_benchmark):
     """
     This excludes the time for run dictionary creation and JSON serialization,
@@ -130,3 +148,22 @@ def test_create_batch_runs_50_100kb(client, aio_benchmark):
     )
     assert result.status_code == 201
     assert len(result.json()["run_ids"]) == 50
+
+
+def test_create_batch_runs_5_1000kb(client, aio_benchmark):
+    """
+    This excludes the time for run dictionary creation and JSON serialization,
+    focusing only on the API call performance.
+    """
+    # Create the run dictionaries outside the benchmark
+    run_dicts = generate_batch_run_dicts(5, 1000)
+
+    # Pre-serialize the JSON outside the benchmark
+    serialized_json = orjson.dumps(run_dicts)
+
+    # Benchmark only the HTTP request with pre-serialized JSON
+    result = aio_benchmark(
+        send_request_with_pre_serialized_json, client, serialized_json
+    )
+    assert result.status_code == 201
+    assert len(result.json()["run_ids"]) == 5

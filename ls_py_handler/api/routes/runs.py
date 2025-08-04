@@ -13,6 +13,75 @@ from ls_py_handler.config.settings import settings
 router = APIRouter(prefix="/runs", tags=["runs"])
 
 
+def build_batch_with_streaming_json(runs: List["Run"]) -> tuple[bytes, List[Dict[str, Any]]]:
+    """
+    Build JSON batch with streaming approach for better memory efficiency.
+    
+    This approach builds JSON incrementally while tracking field positions,
+    avoiding the need to search through the entire batch.
+    """
+    if not runs:
+        return b"[]", []
+
+    # Pre-calculate run data and field JSON
+    run_data_list = []
+    for run in runs:
+        run_dict = run.model_dump()
+        field_jsons = {}
+        
+        for field in ["inputs", "outputs", "metadata"]:
+            field_value = run_dict.get(field, {})
+            field_jsons[field] = orjson.dumps(field_value)
+        
+        run_data_list.append({
+            "run_dict": run_dict,
+            "field_jsons": field_jsons
+        })
+
+    # Build JSON batch incrementally with position tracking
+    batch_parts = [b'[']
+    current_position = 1  # Start after '['
+    field_references = []
+
+    for i, run_data in enumerate(run_data_list):
+        if i > 0:
+            batch_parts.append(b',')
+            current_position += 1
+
+        # Serialize the entire run
+        run_json = orjson.dumps(run_data["run_dict"])
+        
+        # Calculate field positions within this run
+        field_refs = {}
+        run_start_pos = current_position
+        
+        for field in ["inputs", "outputs", "metadata"]:
+            field_json = run_data["field_jsons"][field]
+            
+            # Find field position within the run JSON
+            field_pos_in_run = run_json.find(field_json)
+            
+            if field_pos_in_run != -1:
+                field_start = run_start_pos + field_pos_in_run
+                field_end = field_start + len(field_json)
+                field_refs[field] = f"s3://{settings.S3_BUCKET_NAME}/{{object_key}}#{field_start}:{field_end}/{field}"
+            else:
+                field_refs[field] = ""
+        
+        field_references.append(field_refs)
+        
+        # Add run JSON to batch
+        batch_parts.append(run_json)
+        current_position += len(run_json)
+
+    batch_parts.append(b']')
+    
+    # Combine all parts
+    batch_data = b''.join(batch_parts)
+    
+    return batch_data, field_references
+
+
 class Run(BaseModel):
     id: Optional[UUID4] = Field(default_factory=uuid.uuid4)
     trace_id: UUID4
@@ -65,11 +134,10 @@ async def create_runs(
     if not runs:
         raise HTTPException(status_code=400, detail="No runs provided")
 
-    # Prepare the batch for S3 upload
+    # Prepare the batch for S3 upload using streaming approach
     batch_id = str(uuid.uuid4())
-
-    run_dicts = [run.model_dump() for run in runs]
-    batch_data = orjson.dumps(run_dicts)
+    
+    batch_data, field_references_list = build_batch_with_streaming_json(runs)
 
     object_key = f"batches/{batch_id}.json"
 
@@ -81,26 +149,15 @@ async def create_runs(
         ContentType="application/json",
     )
 
-    # Store references in PG
+    # Store references in PG using pre-calculated field references
     inserted_ids = []
 
     for i, run in enumerate(runs):
-        run_dict = run_dicts[i]
-
-        # Calculate specific offsets for each field in the JSON using a loop
-        field_refs = {}
-        for field in ["inputs", "outputs", "metadata"]:
-            field_json_data = orjson.dumps(run_dict.get(field, {}))
-            field_start_in_run = batch_data.find(field_json_data)
-
-            if field_start_in_run != -1:
-                field_start = field_start_in_run
-                field_end = field_start + len(field_json_data)
-                field_refs[
-                    field
-                ] = f"s3://{settings.S3_BUCKET_NAME}/{object_key}#{field_start}:{field_end}/{field}"
-            else:
-                field_refs[field] = ""
+        # Get pre-calculated field references and substitute object_key
+        field_refs = field_references_list[i]
+        for field_name in field_refs:
+            if field_refs[field_name]:
+                field_refs[field_name] = field_refs[field_name].format(object_key=object_key)
 
         run_id = await db.fetchval(
             """
