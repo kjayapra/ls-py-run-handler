@@ -115,6 +115,95 @@ async def prepare_database_insert_data(runs: List["Run"], field_references_list:
     return insert_data
 
 
+async def fetch_all_fields_optimized(s3: Any, field_refs: Dict[str, str]) -> Dict[str, Any]:
+    """
+    Fetch all fields with minimal S3 requests by consolidating byte ranges.
+    Reduces 3 S3 calls to 1 call per S3 object.
+    """
+    # Group references by S3 object
+    s3_objects = {}
+
+    for field_name, ref in field_refs.items():
+        if ref and ref.startswith("s3://"):
+            bucket, key, offsets, field = parse_s3_ref(ref)
+            if bucket and key and offsets:
+                if key not in s3_objects:
+                    s3_objects[key] = {
+                        "bucket": bucket,
+                        "fields": {},
+                        "min_start": float("inf"),
+                        "max_end": 0,
+                    }
+
+                start_offset, end_offset = offsets
+                s3_objects[key]["fields"][field_name] = {
+                    "start": start_offset,
+                    "end": end_offset,
+                    "field": field,
+                }
+                s3_objects[key]["min_start"] = min(
+                    s3_objects[key]["min_start"], start_offset
+                )
+                s3_objects[key]["max_end"] = max(
+                    s3_objects[key]["max_end"], end_offset
+                )
+
+    results = {"inputs": {}, "outputs": {}, "metadata": {}}
+
+    # Fetch each S3 object with consolidated range
+    for key, obj_info in s3_objects.items():
+        try:
+            # Use consolidated byte range
+            start = obj_info["min_start"]
+            end = obj_info["max_end"]
+            byte_range = f"bytes={start}-{end-1}"
+
+            response = await s3.get_object(
+                Bucket=obj_info["bucket"], Key=key, Range=byte_range
+            )
+            async with response["Body"] as stream:
+                consolidated_data = await stream.read()
+
+            # Extract individual fields from consolidated data
+            for field_name, field_info in obj_info["fields"].items():
+                field_start = field_info["start"] - start
+                field_end = field_info["end"] - start
+                field_data = consolidated_data[field_start:field_end]
+
+                try:
+                    results[field_name] = orjson.loads(field_data)
+                except Exception as parse_error:
+                    print(f"Error parsing {field_name}: {parse_error}")
+                    results[field_name] = {}
+
+        except Exception as e:
+            print(f"Error fetching S3 object {key}: {e}")
+            # Fallback to empty results for this object
+            for field_name in obj_info["fields"]:
+                results[field_name] = {}
+
+    return results
+
+
+def parse_s3_ref(ref):
+    """Parse S3 reference string into components."""
+    if not ref or not ref.startswith("s3://"):
+        return None, None, None, None
+
+    parts = ref.split("/")
+    bucket = parts[2]
+    key = "/".join(parts[3:]).split("#")[0]
+
+    if "#" in ref:
+        offset_part = ref.split("#")[1]
+        if ":" in offset_part and "/" in offset_part:
+            offsets, field = offset_part.split("/")
+            start_offset, end_offset = map(int, offsets.split(":"))
+            return bucket, key, (start_offset, end_offset), field
+
+    return bucket, key, None, None
+
+
 class Run(BaseModel):
     id: Optional[UUID4] = Field(default_factory=uuid.uuid4)
     trace_id: UUID4
@@ -220,65 +309,20 @@ async def get_run(
 
     run_data = dict(row)
 
-    # Function to parse S3 reference
-    def parse_s3_ref(ref):
-        if not ref or not ref.startswith("s3://"):
-            return None, None, None, None
-
-        parts = ref.split("/")
-        bucket = parts[2]
-        key = "/".join(parts[3:]).split("#")[0]
-
-        if "#" in ref:
-            offset_part = ref.split("#")[1]
-            if ":" in offset_part and "/" in offset_part:
-                offsets, field = offset_part.split("/")
-                start_offset, end_offset = map(int, offsets.split(":"))
-                return bucket, key, (start_offset, end_offset), field
-
-        return bucket, key, None, None
-
-    # Function to fetch data from S3 based on reference with byte range
-    async def fetch_from_s3(ref):
-        if not ref or not ref.startswith("s3://"):
-            return {}
-
-        bucket, key, offsets, _field = parse_s3_ref(ref)
-        if not bucket or not key or not offsets:
-            return {}
-
-        start_offset, end_offset = offsets
-        byte_range = f"bytes={start_offset}-{end_offset-1}"
-
-        try:
-            # Fetch only the required byte range
-            response = await s3.get_object(Bucket=bucket, Key=key, Range=byte_range)
-            async with response["Body"] as stream:
-                data = await stream.read()
-            try:
-                # The data should be a valid JSON object corresponding to the field
-                # (inputs, outputs, or metadata) without needing further extraction
-                return orjson.loads(data)
-            except Exception as parse_error:
-                print(f"Error parsing JSON fragment: {parse_error}")
-                print(f"Problematic data: {data}")
-                return {}
-
-        except Exception as e:
-            print(f"Error fetching S3 object with range: {e}")
-            return {}
-
-    inputs, outputs, metadata = await asyncio.gather(
-        fetch_from_s3(run_data["inputs"]),
-        fetch_from_s3(run_data["outputs"]),
-        fetch_from_s3(run_data["metadata"]),
-    )
+    # Use optimized field fetching with consolidated S3 requests
+    field_refs = {
+        "inputs": run_data["inputs"],
+        "outputs": run_data["outputs"], 
+        "metadata": run_data["metadata"]
+    }
+    
+    field_data = await fetch_all_fields_optimized(s3, field_refs)
 
     return {
         "id": str(run_data["id"]),
         "trace_id": str(run_data["trace_id"]),
         "name": run_data["name"],
-        "inputs": inputs,
-        "outputs": outputs,
-        "metadata": metadata,
+        "inputs": field_data["inputs"],
+        "outputs": field_data["outputs"],
+        "metadata": field_data["metadata"],
     }
