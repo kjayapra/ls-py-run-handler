@@ -189,8 +189,8 @@ async def query_runs_benchmark(client, run_ids):
 
 @pytest_asyncio.fixture
 async def runs_10kb_fields(client):
-    """Create 10 runs with 10KB fields for query benchmarking."""
-    run_dicts = generate_batch_run_dicts(10, 10)
+    """Create 50 runs with 10KB fields for query benchmarking."""
+    run_dicts = generate_batch_run_dicts(50, 10)
     serialized_json = orjson.dumps(run_dicts)
     
     post_response = await send_request_with_pre_serialized_json(client, serialized_json)
@@ -204,13 +204,13 @@ def test_query_runs_10kb_fields(runs_10kb_fields, client, aio_benchmark):
     """
     # Benchmark only the query operations
     result = aio_benchmark(query_runs_benchmark, client, runs_10kb_fields)
-    assert result == 10
+    assert result == 50
 
 
 @pytest_asyncio.fixture
 async def runs_50kb_fields(client):
-    """Create 10 runs with 50KB fields for query benchmarking."""
-    run_dicts = generate_batch_run_dicts(10, 50)
+    """Create 50 runs with 50KB fields for query benchmarking."""
+    run_dicts = generate_batch_run_dicts(50, 50)
     serialized_json = orjson.dumps(run_dicts)
     
     post_response = await send_request_with_pre_serialized_json(client, serialized_json)
@@ -219,8 +219,8 @@ async def runs_50kb_fields(client):
 
 @pytest_asyncio.fixture
 async def runs_100kb_fields(client):
-    """Create 10 runs with 100KB fields for query benchmarking."""
-    run_dicts = generate_batch_run_dicts(10, 100)
+    """Create 50 runs with 100KB fields for query benchmarking."""
+    run_dicts = generate_batch_run_dicts(50, 100)
     serialized_json = orjson.dumps(run_dicts)
     
     post_response = await send_request_with_pre_serialized_json(client, serialized_json)
@@ -234,7 +234,7 @@ def test_query_runs_50kb_fields(runs_50kb_fields, client, aio_benchmark):
     """
     # Benchmark only the query operations
     result = aio_benchmark(query_runs_benchmark, client, runs_50kb_fields)
-    assert result == 10
+    assert result == 50
 
 
 def test_query_runs_100kb_fields(runs_100kb_fields, client, aio_benchmark):
@@ -244,4 +244,4 @@ def test_query_runs_100kb_fields(runs_100kb_fields, client, aio_benchmark):
     """
     # Benchmark only the query operations
     result = aio_benchmark(query_runs_benchmark, client, runs_100kb_fields)
-    assert result == 10
+    assert result == 50
