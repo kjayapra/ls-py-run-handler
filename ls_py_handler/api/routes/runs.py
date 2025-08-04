@@ -82,6 +82,39 @@ def build_batch_with_streaming_json(runs: List["Run"]) -> tuple[bytes, List[Dict
     return batch_data, field_references
 
 
+async def upload_batch_to_s3(s3: Any, batch_data: bytes, object_key: str) -> None:
+    """Upload batch data to S3 asynchronously."""
+    await s3.put_object(
+        Bucket=settings.S3_BUCKET_NAME,
+        Key=object_key,
+        Body=batch_data,
+        ContentType="application/json",
+    )
+
+
+async def prepare_database_insert_data(runs: List["Run"], field_references_list: List[Dict[str, str]], object_key: str) -> List[tuple]:
+    """Prepare database insert data asynchronously."""
+    insert_data = []
+    
+    for i, run in enumerate(runs):
+        # Get pre-calculated field references and substitute object_key
+        field_refs = field_references_list[i].copy()  # Copy to avoid mutating original
+        for field_name in field_refs:
+            if field_refs[field_name]:
+                field_refs[field_name] = field_refs[field_name].format(object_key=object_key)
+        
+        insert_data.append((
+            run.id,
+            run.trace_id,
+            run.name,
+            field_refs["inputs"],
+            field_refs["outputs"],
+            field_refs["metadata"],
+        ))
+    
+    return insert_data
+
+
 class Run(BaseModel):
     id: Optional[UUID4] = Field(default_factory=uuid.uuid4)
     trace_id: UUID4
@@ -141,32 +174,12 @@ async def create_runs(
 
     object_key = f"batches/{batch_id}.json"
 
-    # Upload the batch data
-    await s3.put_object(
-        Bucket=settings.S3_BUCKET_NAME,
-        Key=object_key,
-        Body=batch_data,
-        ContentType="application/json",
-    )
-
-    # Store references in PG using batch insert with pre-calculated field references
-    insert_data = []
+    # Execute S3 upload and database preparation in parallel
+    upload_task = upload_batch_to_s3(s3, batch_data, object_key)
+    db_prep_task = prepare_database_insert_data(runs, field_references_list, object_key)
     
-    for i, run in enumerate(runs):
-        # Get pre-calculated field references and substitute object_key
-        field_refs = field_references_list[i]
-        for field_name in field_refs:
-            if field_refs[field_name]:
-                field_refs[field_name] = field_refs[field_name].format(object_key=object_key)
-        
-        insert_data.append((
-            run.id,
-            run.trace_id,
-            run.name,
-            field_refs["inputs"],
-            field_refs["outputs"],
-            field_refs["metadata"],
-        ))
+    # Wait for both operations to complete
+    _, insert_data = await asyncio.gather(upload_task, db_prep_task)
 
     # Single batch insert operation using executemany
     await db.executemany(
