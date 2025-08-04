@@ -31,6 +31,11 @@ class Settings(BaseSettings):
     S3_SECRET_KEY: str = "minioadmin1"
     S3_REGION: str = "us-east-1"
 
+    # Cache settings
+    REDIS_URL: str = "redis://localhost:6379"
+    CACHE_TTL_GET: int = 86400  # 24 hours - individual run retrieval (immutable data)
+    CACHE_TTL_SEARCH: int = 14400  # 4 hours - search results (may grow with new data)
+
     # Configure pydantic to read from .env file
     model_config = SettingsConfigDict(
         env_file=".env",

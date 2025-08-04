@@ -1,5 +1,7 @@
 from aiobotocore.session import get_session
 from fastapi import FastAPI
+from fastapi_cache import FastAPICache
+from fastapi_cache.backends.redis import RedisBackend
 
 from ls_py_handler.api.routes.runs import router as runs_router
 from ls_py_handler.config.settings import settings
@@ -17,6 +19,15 @@ app.include_router(runs_router)
 @app.on_event("startup")
 async def startup_event():
     """Initialize resources when the application starts."""
+    # Initialize cache
+    try:
+        FastAPICache.init(RedisBackend(), prefix="ls-py-handler-cache")
+        print(f"Initialized cache with Redis at {settings.REDIS_URL}")
+    except Exception as e:
+        print(f"Cache initialization failed: {e}, using in-memory fallback")
+        from fastapi_cache.backends.inmemory import InMemoryBackend
+        FastAPICache.init(InMemoryBackend(), prefix="ls-py-handler-cache")
+    
     # Create S3 bucket if it doesn't exist
     session = get_session()
     async with session.create_client(
