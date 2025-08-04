@@ -149,30 +149,36 @@ async def create_runs(
         ContentType="application/json",
     )
 
-    # Store references in PG using pre-calculated field references
-    inserted_ids = []
-
+    # Store references in PG using batch insert with pre-calculated field references
+    insert_data = []
+    
     for i, run in enumerate(runs):
         # Get pre-calculated field references and substitute object_key
         field_refs = field_references_list[i]
         for field_name in field_refs:
             if field_refs[field_name]:
                 field_refs[field_name] = field_refs[field_name].format(object_key=object_key)
-
-        run_id = await db.fetchval(
-            """
-            INSERT INTO runs (id, trace_id, name, inputs, outputs, metadata)
-            VALUES ($1, $2, $3, $4, $5, $6)
-            RETURNING id
-            """,
+        
+        insert_data.append((
             run.id,
             run.trace_id,
             run.name,
             field_refs["inputs"],
             field_refs["outputs"],
             field_refs["metadata"],
-        )
-        inserted_ids.append(str(run_id))
+        ))
+
+    # Single batch insert operation using executemany
+    await db.executemany(
+        """
+        INSERT INTO runs (id, trace_id, name, inputs, outputs, metadata)
+        VALUES ($1, $2, $3, $4, $5, $6)
+        """,
+        insert_data
+    )
+    
+    # Get the inserted IDs (they're the same as the original run IDs)
+    inserted_ids = [str(run.id) for run in runs]
 
     return {"status": "created", "run_ids": inserted_ids}
 
@@ -224,7 +230,7 @@ async def get_run(
         if not ref or not ref.startswith("s3://"):
             return {}
 
-        bucket, key, offsets, field = parse_s3_ref(ref)
+        bucket, key, offsets, _field = parse_s3_ref(ref)
         if not bucket or not key or not offsets:
             return {}
 
